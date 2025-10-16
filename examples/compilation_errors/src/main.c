@@ -7,6 +7,15 @@
 #include "pico/stdio.h"
 
 
+#include <FreeRTOS.h>
+#include <queue.h>
+#include <task.h>
+
+
+
+
+
+
 #define TEMP_MIN        0
 #define TEMP_MAX        40
 #define LUX_MIN         100
