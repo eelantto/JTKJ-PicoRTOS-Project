@@ -29,6 +29,7 @@ enum state programState = WAITING;
 uint32_t ambientLight;
 
 static void btn_fxn(uint gpio, uint32_t eventMask) {
+    toggle_led();
     // Tehtävä 1: Vaihda LEDin tila.
     //            Tarkista SDK, ja jos et löydä vastaavaa funktiota, sinun täytyy toteuttaa se itse.
     // Exercise 1: Toggle the LED. 
@@ -154,6 +155,13 @@ int main() {
     
     init_hat_sdk();
     sleep_ms(300); //Wait some time so initialization of USB and hat is done.
+
+    init_led();
+
+    init_button1();
+
+    gpio_set_irq_enabled_with_callback(BUTTON1, GPIO_IRQ_EDGE_RISE, true, btn_fxn);
+
 
     // Exercise 1: Initialize the button and the led and define an register the corresponding interrupton.
     //             Interruption handler is defined up as btn_fxn
