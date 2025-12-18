@@ -266,6 +266,18 @@ Hence I had to add it by hand in `settings.json` //ADD RIGHT PATH TO NINJA. GENE
     ]
     ```
 
+In addition, the C IntelligeSense Engine cache grows a lot specially if you are creating new projects. In order to reduce this: 
+
+1. Open in VSCode, and press Ctrl+Shift+P. Find Preferences: Set User Settings (JSON)
+2. Add the following line sto the JSON file: 
+```json
+"C_Cpp.intelliSenseCacheSize": 1024,
+"C_Cpp.intelliSenseCachePath": "/tmp/vscode-intel-cache"
+
+```
+3. Create the temp folder: mkdir -p /tmp/vscode-intel-cache. This will reinit the cache everytime the virtual machine starts. 
+
+
 ---
 
 ### Step 10: Verify Installation
