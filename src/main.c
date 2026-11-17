@@ -22,6 +22,9 @@
 #define NOTE_D6 1175
 #define NOTE_G6 1568
 
+#define MORSE_YKSIKKO_MS 240
+#define MAX_VIESTI 256
+
 //Add here necessary states
 enum state { IDLE, SEND_DATA, RECEIVE_DATA };
 enum state programState = IDLE;
