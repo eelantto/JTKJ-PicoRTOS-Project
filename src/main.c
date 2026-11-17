@@ -9,6 +9,7 @@
 #include <task.h>
 
 #include "tkjhat/sdk.h"
+#include "serial_comm.h"
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
