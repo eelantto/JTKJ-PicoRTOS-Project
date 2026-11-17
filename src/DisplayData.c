@@ -145,8 +145,8 @@ int main() {
 
 	sleep_ms(300);
 	//Luodaan uusi viestijono
-	viestiJono = xQueueCreate(3, MAX_VIESTI);
-	if (viestiJono == NULL) {
+	rxQueue = xQueueCreate(3, MAX_VIESTI);
+	if (rxQueue == NULL) {
 		printf("Viestijonon luominen epäonnistui\n");
 		return 0;
 	}
