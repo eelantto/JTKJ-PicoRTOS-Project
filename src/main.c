@@ -267,13 +267,10 @@ int main() {
         return 0;
     }
 
-    TaskHandle_t hNaytto = NULL, hTesti = NULL;
+    TaskHandle_t hNaytto = NULL;
 
 	//Annetaan task FreeRTOSlle
 	xTaskCreate(naytto_task, "naytto", 2048, NULL, 2, &hNaytto);
-
-    
-	//xTaskCreate(testi_task,  "testi",  2048, NULL, 2, &hTesti);
 
     // Start the scheduler (never returns)
     vTaskStartScheduler();
