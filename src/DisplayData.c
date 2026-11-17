@@ -10,7 +10,7 @@
 #include "tkjhat/sdk.h"
 
 #define MORSE_YKSIKKO_MS 240
-#define MAX_VIESTI 256
+#define MAX_VIESTI 128
 
 
 //prototyypit
