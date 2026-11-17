@@ -68,7 +68,7 @@ static void led_viesti(char viesti[]) {
 			set_led_status(true);
 			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
 			set_led_status(false);
-			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKO_MS));
+			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
 
 		}
 		else if (m == ' ') {
@@ -160,4 +160,4 @@ int main() {
 	vTaskStartScheduler();
 	return 0;
 }
-}
+
