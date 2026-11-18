@@ -22,9 +22,21 @@
 #define NOTE_D6 1175
 #define NOTE_G6 1568
 
+#define MORSE_YKSIKKO_MS 240
+#define MAX_VIESTI 128
+
 //Add here necessary states
 enum state { IDLE, SEND_DATA, RECEIVE_DATA };
 enum state programState = IDLE;
+
+static void led_viesti(char viesti[]);
+static void lcd_viesti(char viesti[]);
+static void naytto_task(void *arg);
+int viesti_eheys(char viesti[]);
+static void vastaanotto_task(void *arg);
+
+// Jono, jolla vastaanotettu viesti siirretään naytto_task:lle
+static QueueHandle_t viestiJono = NULL;
 
 // Note sequence and durations for the success melody
 int melody[] = {
@@ -146,6 +158,150 @@ static void example_task(void *arg){
     }
 }
 
+static void led_viesti(char viesti[]) {
+	
+	//Lasketaan viestin pituus
+	int pituus = strlen(viesti);
+	
+	//LED pois päältä
+	set_led_status(false);
+	
+	//Kytketään LED päälle/pois merkin määräämäksi ajaksi
+	for (int i = 0; i < pituus; i++) {
+		
+		char m = viesti[i];
+		
+		if (m == '-') {
+			//LED päällä 720ms
+			set_led_status(true);
+			vTaskDelay(pdMS_TO_TICKS(3*MORSE_YKSIKKO_MS));
+			//LED pois 240ms (merkkiväli)
+			set_led_status(false);
+			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
+
+		}	
+		else if (m == '.') {
+			set_led_status(true);
+			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
+			set_led_status(false);
+			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
+
+		}
+		else if (m == ' ') {
+			//Sanaväli, josta lyhennetty merkkiväli
+			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
+		}
+	}
+}
+static void lcd_viesti(char viesti[]) {
+		
+
+	
+	//Tyhjennetään LCD
+	clear_display();
+	
+	//Viestin pituus
+	int pituus = strlen(viesti);
+	
+	int koord_y = 0;
+	
+	for (int i = 0; i < pituus; i += 21) {
+		//Tarkistetaan, kuinka monta merkkiä on näyttämättä
+		int maara = pituus - i;
+		if (maara > 21) {
+			maara = 21;
+		}
+		//Tehdään tilaa 21:lee merkille ja \0:lle
+		char rivi[22]; 
+		//Kopioidaan rivin verran merkkejä tai loput merkeistä viestistä
+		memcpy(rivi, viesti + i, maara);
+		//Lisätään lopetusmerkki
+		rivi[maara] = '\0';
+		//Kirjoittaa viesti LCD:lle.
+		//Merkkimäärä per rivi on 128/6 = 21.3 -> 21 merkkiä
+		//Rivejä yhteensä: 64/8 = 8
+		//Merkkejä yhteensä 8*21 168 per viesti
+		write_text_xy(0, koord_y, rivi);
+		koord_y += 8;
+		//Lopetetaan loop jos viestin pituus on yli LCD:n merkkimäärän.
+		if(koord_y >= 64) {
+			break;
+		}
+	}
+}
+
+static void naytto_task(void *arg) {
+	//Jätetään arg huomiotta
+	(void)arg;
+	
+	//Kopioidaan viesti
+	char viesti[MAX_VIESTI];
+	
+	//Alustetaan LED ja LCD
+	init_display();
+	init_led();
+
+	while(1) {
+		//Luetaan viesti ja ododtetaan 'ikuisesti'
+		if(xQueueReceive(viestiJono, viesti, portMAX_DELAY) == pdTRUE) {
+			//Näytetään viesti LED:llä ja LCD:llä
+			lcd_viesti(viesti);
+			led_viesti(viesti);
+		}
+	}
+}
+
+// Kokoaa työasemalta tulevat symbolit viestiksi ja antaa sen näytölle/LEDille.
+// Viesti päättyy rivinvaihtoon ('\n'), jonka edellä olevat välilyönnit poistetaan.
+static void vastaanotto_task(void *arg) {
+	(void)arg;
+
+	char viesti[MAX_VIESTI];
+	int pituus = 0;
+	char c;
+
+	while (1) {
+		if (serial_receive_symbol(&c, pdMS_TO_TICKS(100))) {
+			if (c == '\n') {
+				while (pituus > 0 && viesti[pituus - 1] == ' ') {
+					pituus--;
+				}
+				viesti[pituus] = '\0';
+				if (pituus > 0) {
+					xQueueSend(viestiJono, viesti, 0);
+				}
+				pituus = 0;
+			}
+			else if (pituus < MAX_VIESTI - 1) {
+				viesti[pituus] = c;
+				pituus++;
+			}
+		}
+	}
+}
+
+// Lähettää morse-viestin työasemalle (esim. "... --- ...") ja lisää loppuun
+// kaksi välilyöntiä ja rivinvaihdon. Palauttaa true, jos lähetys onnistui.
+// Kutsutaan taskista (esim. napin painalluksen jälkeen).
+bool laheta_viesti(const char *morse) {
+	if (!serial_is_connected()) {
+		return false;
+	}
+	if (!serial_send_string(morse) || !serial_send_string("  \n")) {
+		serial_tx_clear();
+		return false;
+	}
+	// Odotetaan enintään 1 s, että kaikki on kirjoitettu USB:lle
+	for (int i = 0; i < 100 && !serial_tx_idle(); i++) {
+		vTaskDelay(pdMS_TO_TICKS(10));
+	}
+	if (!serial_tx_idle()) {
+		serial_tx_clear();
+		return false;
+	}
+	return true;
+}
+
 int main() {
     stdio_init_all();
     // Uncomment this lines if you want to wait till the serial monitor is connected
@@ -168,6 +324,18 @@ int main() {
         printf("Example Task creation failed\n");
         return 0;
     }
+
+    TaskHandle_t hNaytto = NULL;
+
+	//Annetaan task FreeRTOSlle
+	xTaskCreate(naytto_task, "naytto", 2048, NULL, 2, &hNaytto);
+
+	// Jono luodaan ennen taskeja, jotta ne voivat käyttää sitä heti
+	viestiJono = xQueueCreate(4, MAX_VIESTI);
+	xTaskCreate(vastaanotto_task, "vastaanotto", DEFAULT_STACK_SIZE, NULL, 2, NULL);
+
+	// Käynnistää USB-sarjaliikenteen. Heti perään vTaskStartScheduler.
+	serial_comm_init();
 
     // Start the scheduler (never returns)
     vTaskStartScheduler();
