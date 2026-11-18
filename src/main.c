@@ -49,7 +49,7 @@ static void lcd_msg(char msg[]);
 static void display_task(void *arg);
 static void vastaanotto_task(void *arg);
 
-// Jono, jolla vastaanotettu viesti siirretään naytto_task:lle
+// Jono, jolla vastaanotettu viesti siirretään display_task:lle
 static QueueHandle_t msgQueue = NULL;
 
 // I2C-väylä on jaettu näytön ja IMU:n kesken, joten käyttö suojataan mutexilla
@@ -282,14 +282,14 @@ static void nayta_vastaanotettu(const char *morse, const char *teksti) {
 	nayta_rivit(morse, 32, 4);     // rivit 5-8: morse-merkit
 }
 
-static void naytto_task(void *arg) {
+static void display_task(void *arg) {
 	//Jätetään arg huomiotta
 	(void)arg;
 
 	//Kopioidaan viesti
-	char viesti[MAX_VIESTI];
+	char viesti[MAX_MSG];
 	//Viesti kirjaimiksi purettuna
-	char teksti[MAX_VIESTI];
+	char teksti[MAX_MSG];
 
 	//Alustetaan LED ja LCD (näyttö käyttää jaettua I2C-väylää)
 	xSemaphoreTake(i2cMutex, portMAX_DELAY);
@@ -299,14 +299,14 @@ static void naytto_task(void *arg) {
 
 	while(1) {
 		//Luetaan viesti ja ododtetaan 'ikuisesti'
-		if(xQueueReceive(viestiJono, viesti, portMAX_DELAY) == pdTRUE) {
+		if(xQueueReceive(msgQueue, viesti, portMAX_DELAY) == pdTRUE) {
 			//Puretaan viesti kirjaimiksi ja näytetään se LCD:llä ja LED:llä
 			morse_to_string(viesti, teksti);
 			if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
 				nayta_vastaanotettu(viesti, teksti);
 				xSemaphoreGive(i2cMutex);
 			}
-			led_viesti(viesti);
+			led_msg(viesti);
 		}
 	}
 }
@@ -316,7 +316,7 @@ static void naytto_task(void *arg) {
 static void vastaanotto_task(void *arg) {
 	(void)arg;
 
-	char viesti[MAX_VIESTI];
+	char viesti[MAX_MSG];
 	int pituus = 0;
 	char c;
 
@@ -328,11 +328,11 @@ static void vastaanotto_task(void *arg) {
 				}
 				viesti[pituus] = '\0';
 				if (pituus > 0) {
-					xQueueSend(viestiJono, viesti, 0);
+					xQueueSend(msgQueue, viesti, 0);
 				}
 				pituus = 0;
 			}
-			else if (pituus < MAX_VIESTI - 1) {
+			else if (pituus < MAX_MSG - 1) {
 				viesti[pituus] = c;
 				pituus++;
 			}
@@ -456,7 +456,7 @@ static char liike_askel(float ax, float ay, float az, int dtMs) {
 // Näyttää kokoamisen alla olevan viestin (morse-merkit) näytöllä
 static void nayta_teksti(char viesti[]) {
 	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
-		lcd_viesti(viesti);
+		lcd_msg(viesti);
 		xSemaphoreGive(i2cMutex);
 	}
 }
@@ -490,7 +490,7 @@ static void ilmoita(const char *teksti, bool onnistui) {
 static void kirjoitus_task(void *arg) {
 	(void)arg;
 
-	char viesti[MAX_VIESTI];       // viesti, jota kootaan
+	char viesti[MAX_MSG];       // viesti, jota kootaan
 	int pituus = 0;
 	bool sw1Ennen = false;         // napin edellinen tila (nousevan reunan tunnistukseen)
 	bool sw2Ennen = false;
@@ -519,7 +519,7 @@ static void kirjoitus_task(void *arg) {
 		}
 		if (rc == 0) {
 			char symboli = liike_askel(ax, ay, az, dtMs);
-			if (symboli != 0 && pituus < MAX_VIESTI - 1) {
+			if (symboli != 0 && pituus < MAX_MSG - 1) {
 				viesti[pituus] = symboli;
 				pituus++;
 				viesti[pituus] = '\0';
@@ -550,7 +550,7 @@ static void kirjoitus_task(void *arg) {
 		if (sw1Painettu) {
 			// Välilyönti vain, jos viestissä on jo merkkejä eikä lopussa ole jo kahta välilyöntiä
 			bool kaksiValia = (pituus >= 2 && viesti[pituus - 1] == ' ' && viesti[pituus - 2] == ' ');
-			if (pituus > 0 && !kaksiValia && pituus < MAX_VIESTI - 1) {
+			if (pituus > 0 && !kaksiValia && pituus < MAX_MSG - 1) {
 				viesti[pituus] = ' ';
 				pituus++;
 				viesti[pituus] = '\0';
@@ -622,7 +622,7 @@ int main() {
 	xTaskCreate(display_task, "display", 2048, NULL, 2, &hDisplay);
 
 	// Jono luodaan ennen taskeja, jotta ne voivat käyttää sitä heti
-	viestiJono = xQueueCreate(4, MAX_VIESTI);
+	msgQueue = xQueueCreate(4, MAX_MSG);
 	xTaskCreate(vastaanotto_task, "vastaanotto", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 	xTaskCreate(kirjoitus_task, "kirjoitus", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
@@ -635,4 +635,3 @@ int main() {
     // Never reach this line.
     return 0;
 }
-
