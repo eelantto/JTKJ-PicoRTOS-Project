@@ -9,18 +9,18 @@
 
 #include "tkjhat/sdk.h"
 
-#define MORSE_YKSIKKO_MS 240
-#define MAX_VIESTI 128
+#define MORSE_UNIT_MS 240
+#define MAX_MSG 128
 
 
 //prototyypit
-static void led_viesti(char viesti[]);
-static void lcd_viesti(char viesti[]);
-static void naytto_task(void *arg);
-int viesti_eheys(char viesti[]);
+static void led_msg(char msg[]);
+static void lcd_msg(char msg[]);
+static void display_task(void *arg);
 
-//Kahva
-static QueueHandle_t viestiJono;
+
+//Handle
+static QueueHandle_t msgQueue;
 
 
 //Varmistetaan viestin eheys
@@ -42,97 +42,97 @@ static QueueHandle_t viestiJono;
 // }
 
 //LED 
-static void led_viesti(char viesti[]) {
-	
-	//Lasketaan viestin pituus
-	int pituus = strlen(viesti);
-	
-	//LED pois päältä
-	set_led_status(false);
-	
-	//Kytketään LED päälle/pois merkin määräämäksi ajaksi
-	for (int i = 0; i < pituus; i++) {
-		
-		char m = viesti[i];
-		
-		if (m == '-') {
-			//LED päällä 720ms
-			set_led_status(true);
-			vTaskDelay(pdMS_TO_TICKS(3*MORSE_YKSIKKO_MS));
-			//LED pois 240ms (merkkiväli)
-			set_led_status(false);
-			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
-
-		}	
-		else if (m == '.') {
-			set_led_status(true);
-			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
-			set_led_status(false);
-			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
-
-		}
-		else if (m == ' ') {
-			//Sanaväli, josta lyhennetty merkkiväli
-			vTaskDelay(pdMS_TO_TICKS(MORSE_YKSIKKO_MS));
-		}
-	}
-}
-	
-
-static void lcd_viesti(char viesti[]) {
+static void lcd_msg(char msg[]) {
 		
 
 	
-	//Tyhjennetään LCD
+	//Clear LCD
 	clear_display();
 	
-	//Viestin pituus
-	int pituus = strlen(viesti);
+	//Message length
+	int length = strlen(msg);
 	
-	int koord_y = 0;
+	int coord_y = 0;
 	
 	for (int i = 0; i < pituus; i += 21) {
-		//Tarkistetaan, kuinka monta merkkiä on näyttämättä
-		int maara = pituus - i;
-		if (maara > 21) {
-			maara = 21;
+		//Checking how many symbols are yet to be shown
+		int amount = length - i;
+		if (amount > 21) {
+			amount = 21;
 		}
-		//Tehdään tilaa 21:lee merkille ja \0:lle
-		char rivi[22]; 
-		//Kopioidaan rivin verran merkkejä tai loput merkeistä viestistä
-		memcpy(rivi, viesti + i, maara);
-		//Lisätään lopetusmerkki
-		rivi[maara] = '\0';
-		//Kirjoittaa viesti LCD:lle.
-		//Merkkimäärä per rivi on 128/6 = 21.3 -> 21 merkkiä
-		//Rivejä yhteensä: 64/8 = 8
-		//Merkkejä yhteensä 8*21 168 per viesti
-		write_text_xy(0, koord_y, rivi);
-		koord_y += 8;
-		//Lopetetaan loop jos viestin pituus on yli LCD:n merkkimäärän.
-		if(koord_y >= 64) {
+		//Making space for 21 symbols +  '\0'
+		char row[22]; 
+		//Copying a row of symbols or the rest of the message
+		memcpy(row, msg + i, amount);
+		//Adding '\0'
+		row[amount] = '\0';
+		//Typing the msg on the LCD
+		//Symbols per row is 128/6 = 21.3 -> 21
+		//Rows in total: 64/8 = 8
+		//Symbols in total 8*21 168 per message
+		write_text_xy(0, coord_y, row);
+		coord_y += 8;
+		//ENding the loop if message length is more than the LCD can hold
+		if(coord_y >= 64) {
 			break;
 		}
 	}
 }
+	
 
-static void naytto_task(void *arg) {
-	//Jätetään arg huomiotta
+static void led_msg(char msg[]) {
+	
+	//Message length
+	int length = strlen(msg);
+	
+	//LED off
+	set_led_status(false);
+	
+	//LED on/off depending for a time depending on symbol
+	for (int i = 0; i < length; i++) {
+		
+		char m = msg[i];
+		
+		if (m == '-') {
+			//LED on 720ms
+			set_led_status(true);
+			vTaskDelay(pdMS_TO_TICKS(3*MORSE_UNIT_MS));
+			//LED off 240ms (space)
+			set_led_status(false);
+			vTaskDelay(pdMS_TO_TICKS(MORSE_UNIT_MS));
+
+		}	
+		else if (m == '.') {
+			set_led_status(true);
+			vTaskDelay(pdMS_TO_TICKS(MORSE_UNIT_MS));
+			set_led_status(false);
+			vTaskDelay(pdMS_TO_TICKS(MORSE_UNIT_MS));
+
+		}
+		else if (m == ' ') {
+			//Word spacing, from which substracted a symbol space
+			vTaskDelay(pdMS_TO_TICKS(MORSE_UNIT_MS));
+		}
+	}
+}
+
+static void display_task(void *arg) {
+	//Ignoring arg
 	(void)arg;
 	
-	//Kopioidaan viesti
-	char viesti[MAX_VIESTI];
+	//Copying message
+	char msg[MAX_MSG];
 	
-	//Alustetaan LED ja LCD
+	//Initializing LED and LCD
 	init_display();
 	init_led();
 
 	while(1) {
-		//Luetaan viesti ja ododtetaan 'ikuisesti'
-		if(xQueueReceive(viestiJono, viesti, portMAX_DELAY) == pdTRUE) {
-			//Näytetään viesti LED:llä ja LCD:llä
-			lcd_viesti(viesti);
-			led_viesti(viesti);
+		//Reading the message and waiting 'forever'
+		if(xQueueReceive(msgQueue, msg, portMAX_DELAY) == pdTRUE) {
+			//Displaying message with lcd and led
+			lcd_viesti(msg);
+			led_viesti(msg);
 		}
 	}
 }
@@ -140,23 +140,23 @@ static void naytto_task(void *arg) {
 
 
 int main() {
-	stdio_init_all(); //alustaa Picon I/O
-	init_hat_sdk(); //Alustetaan TJKHAT
+	stdio_init_all(); //Init Pico I/O
+	init_hat_sdk(); //Init TJKHAT
 
 	sleep_ms(300);
-	//Luodaan uusi viestijono
-	rxQueue = xQueueCreate(3, MAX_VIESTI);
+	//Creating new msgQueue
+	rxQueue = xQueueCreate(3, MAX_MSG);
 	if (rxQueue == NULL) {
 		printf("Viestijonon luominen epäonnistui\n");
 		return 0;
 	}
-	//Kahvat
-	TaskHandle_t hNaytto = NULL;
+	//Handle
+	TaskHandle_t hDisplay = NULL;
 
-	//Annetaan task FreeRTOSlle
-	xTaskCreate(naytto_task, "naytto", 2048, NULL, 2, &hNaytto);
+	//Giving the task to FreeRTOS
+	xTaskCreate(display_task, "display", 2048, NULL, 2, &hDisplay);
 
-	//Aloitetaan Scheduler
+	//Init Scheduler
 	vTaskStartScheduler();
 	return 0;
 }
