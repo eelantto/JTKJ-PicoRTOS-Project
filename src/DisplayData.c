@@ -54,7 +54,7 @@ static void lcd_msg(char msg[]) {
 	
 	int coord_y = 0;
 	
-	for (int i = 0; i < pituus; i += 21) {
+	for (int i = 0; i < length; i += 21) {
 		//Checking how many symbols are yet to be shown
 		int amount = length - i;
 		if (amount > 21) {
@@ -131,8 +131,8 @@ static void display_task(void *arg) {
 		//Reading the message and waiting 'forever'
 		if(xQueueReceive(msgQueue, msg, portMAX_DELAY) == pdTRUE) {
 			//Displaying message with lcd and led
-			lcd_viesti(msg);
-			led_viesti(msg);
+			lcd_msg(msg);
+			led_msg(msg);
 		}
 	}
 }
