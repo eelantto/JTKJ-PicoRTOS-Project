@@ -1,11 +1,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 #include <pico/stdlib.h>
 
 #include <FreeRTOS.h>
 #include <queue.h>
+#include <semphr.h>
 #include <task.h>
 
 #include "tkjhat/sdk.h"
@@ -25,6 +27,19 @@
 #define MORSE_YKSIKKO_MS 240
 #define MAX_VIESTI 128
 
+// IMU-liikkeentunnistuksen asetukset (kiihtyvyys g-yksikköinä).
+// Arvot ovat lähtöarvoja, ja ne säädetään kokeilemalla laitteella.
+#define IMU_JAKSO_MS 20           // IMU:n lukuväli
+#define LIIKE_ALKU_G 0.15f        // liike alkaa, kun kiihtyvyys poikkeaa näin paljon lepoarvosta
+#define LIIKE_SUMMA_G_MS 25.0f    // liikkeen määrä (g*ms), joka tuottaa merkin
+#define LIIKE_IKKUNA_MS 300       // aika, jonka sisällä liikkeen määrän täytyy täyttyä
+#define PAIKALLAAN_G 0.06f        // tätä pienempi muutos tulkitaan paikallaanoloksi
+#define PAIKALLAAN_MS 600         // näin kauan laitteen täytyy olla paikallaan ennen seuraavaa merkkiä
+#define NAPPI_VIIVE_MS 120        // nappien värähtelyn suodatus
+// Liikkeen suunta mitataan x-akselilta: positiivinen = '.', negatiivinen = '-'.
+// Jos suunnat ovat väärinpäin, vaihda alla olevan makron merkki (ax -> -ax).
+#define LIIKE_AKSELI(ax, ay, az) (ax)
+
 //Add here necessary states
 enum state { IDLE, SEND_DATA, RECEIVE_DATA };
 enum state programState = IDLE;
@@ -37,6 +52,10 @@ static void vastaanotto_task(void *arg);
 
 // Jono, jolla vastaanotettu viesti siirretään naytto_task:lle
 static QueueHandle_t viestiJono = NULL;
+
+// I2C-väylä on jaettu näytön ja IMU:n kesken, joten käyttö suojataan mutexilla
+static SemaphoreHandle_t i2cMutex = NULL;
+static void kirjoitus_task(void *arg);
 
 // Note sequence and durations for the success melody
 int melody[] = {
@@ -121,14 +140,22 @@ void morse_to_string(const char *morseText, char *decodedText) {
     
     for (int i = 0; ; i++) {
         if (morseText[i] != ' ' && morseText[i] != '\0') {
-            temporary[j] = morseText[i];
+            // Tallennetaan enintään 5 merkkiä, ettei taulukko ylity
+            if (j < 5) {
+                temporary[j] = morseText[i];
+            }
             j++;
         }
         
         else {
             if (j > 0) {
-                temporary[j] = '\0';
-                decodedText[k] = morse_to_char(temporary);
+                if (j <= 5) {
+                    temporary[j] = '\0';
+                    decodedText[k] = morse_to_char(temporary);
+                }
+                else {
+                    decodedText[k] = '!';   // liian pitkä jakso, ei kelvollinen merkki
+                }
                 k++;
                 j = 0;
             }
@@ -230,22 +257,56 @@ static void lcd_viesti(char viesti[]) {
 	}
 }
 
+// Kirjoittaa tekstin näytölle riveittäin (21 merkkiä/rivi) kohdasta y alkaen.
+// Käyttää enintään maxRivit riviä. Kutsujan on pidettävä i2cMutex.
+static void nayta_rivit(const char *teksti, int y, int maxRivit) {
+	int pituus = strlen(teksti);
+
+	for (int i = 0, r = 0; i < pituus && r < maxRivit; i += 21, r++) {
+		int maara = pituus - i;
+		if (maara > 21) {
+			maara = 21;
+		}
+		char rivi[22];
+		memcpy(rivi, teksti + i, maara);
+		rivi[maara] = '\0';
+		write_text_xy(0, y, rivi);
+		y += 8;
+	}
+}
+
+// Näyttää vastaanotetun viestin: ylhäällä puretut kirjaimet, alhaalla morse-merkit.
+// Kutsujan on pidettävä i2cMutex.
+static void nayta_vastaanotettu(const char *morse, const char *teksti) {
+	clear_display();
+	nayta_rivit(teksti, 0, 3);     // rivit 1-3: kirjaimet
+	nayta_rivit(morse, 32, 4);     // rivit 5-8: morse-merkit
+}
+
 static void naytto_task(void *arg) {
 	//Jätetään arg huomiotta
 	(void)arg;
-	
+
 	//Kopioidaan viesti
 	char viesti[MAX_VIESTI];
-	
-	//Alustetaan LED ja LCD
+	//Viesti kirjaimiksi purettuna
+	char teksti[MAX_VIESTI];
+
+	//Alustetaan LED ja LCD (näyttö käyttää jaettua I2C-väylää)
+	xSemaphoreTake(i2cMutex, portMAX_DELAY);
 	init_display();
+	xSemaphoreGive(i2cMutex);
 	init_led();
 
 	while(1) {
 		//Luetaan viesti ja ododtetaan 'ikuisesti'
 		if(xQueueReceive(viestiJono, viesti, portMAX_DELAY) == pdTRUE) {
-			//Näytetään viesti LED:llä ja LCD:llä
-			lcd_viesti(viesti);
+			//Puretaan viesti kirjaimiksi ja näytetään se LCD:llä ja LED:llä
+			morse_to_string(viesti, teksti);
+			if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
+				nayta_vastaanotettu(viesti, teksti);
+				xSemaphoreGive(i2cMutex);
+			}
 			led_viesti(viesti);
 		}
 	}
@@ -302,6 +363,229 @@ bool laheta_viesti(const char *morse) {
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// Liikkeen tunnistus (IMU)
+// ---------------------------------------------------------------------------
+
+// Tilakone:
+//   LIIKE_PAIKALLAAN  odotetaan, että laite on ollut PAIKALLAAN_MS paikallaan.
+//                     Tässä tilassa aloitetaan myös käynnistyksessä, joten
+//                     käynnistyshetken asento ei tuota symbolia.
+//   LIIKE_VALMIS      laite on paikallaan, odotetaan liikettä
+//   LIIKE_KESKEN      liike on alkanut, kerätään liikkeen määrää LIIKE_IKKUNA_MS ajan
+// Siirtymät:
+//   PAIKALLAAN -> VALMIS     laite on ollut riittävän kauan paikallaan
+//   VALMIS     -> KESKEN     kiihtyvyys poikkeaa lepoarvosta yli LIIKE_ALKU_G
+//   KESKEN     -> PAIKALLAAN liikkeen määrä riittää (merkki tallennetaan) tai aika loppuu
+enum liike_tila { LIIKE_PAIKALLAAN = 1, LIIKE_VALMIS, LIIKE_KESKEN };
+
+static enum liike_tila liikeTila = LIIKE_PAIKALLAAN;
+static bool refOlemassa = false;       // onko lepoarvo (vertailuasento) asetettu
+static float refX, refY, refZ;         // lepoarvo, eli laitteen asento paikallaan
+static int paikallaanMs = 0;           // kuinka kauan laite on ollut paikallaan
+static float liikeSumma = 0.0f;        // liikkeen määrä (g*ms), merkki kertoo suunnan
+static int liikeMs = 0;                // liikkeen alusta kulunut aika
+
+// Pakottaa tilakoneen odottamaan paikallaanoloa (esim. napin painalluksen jälkeen)
+static void liike_nollaa(void) {
+	liikeTila = LIIKE_PAIKALLAAN;
+	refOlemassa = false;
+}
+
+// Käsittelee yhden IMU-näytteen. Palauttaa '.' tai '-', kun liike tunnistetaan,
+// muuten 0. dtMs on edellisestä näytteestä kulunut aika.
+static char liike_askel(float ax, float ay, float az, int dtMs) {
+	char symboli = 0;
+	float akseli = LIIKE_AKSELI(ax, ay, az);
+	float akseliRef = LIIKE_AKSELI(refX, refY, refZ);
+
+	switch (liikeTila) {
+
+	case LIIKE_PAIKALLAAN:
+		// Jos asento muuttuu, vertailuasento ja ajanlasku aloitetaan alusta
+		if (!refOlemassa
+			|| fabsf(ax - refX) > PAIKALLAAN_G
+			|| fabsf(ay - refY) > PAIKALLAAN_G
+			|| fabsf(az - refZ) > PAIKALLAAN_G) {
+			refX = ax;
+			refY = ay;
+			refZ = az;
+			refOlemassa = true;
+			paikallaanMs = 0;
+		}
+		else {
+			paikallaanMs += dtMs;
+			if (paikallaanMs >= PAIKALLAAN_MS) {
+				liikeTila = LIIKE_VALMIS;
+			}
+		}
+		break;
+
+	case LIIKE_VALMIS:
+		if (fabsf(akseli - akseliRef) > LIIKE_ALKU_G) {
+			liikeSumma = (akseli - akseliRef) * dtMs;
+			liikeMs = dtMs;
+			liikeTila = LIIKE_KESKEN;
+		}
+		break;
+
+	case LIIKE_KESKEN:
+		liikeSumma += (akseli - akseliRef) * dtMs;
+		liikeMs += dtMs;
+		if (fabsf(liikeSumma) >= LIIKE_SUMMA_G_MS) {
+			// Riittävästi liikettä: suunta ratkaisee merkin
+			symboli = (liikeSumma > 0) ? '.' : '-';
+			liike_nollaa();
+		}
+		else if (liikeMs >= LIIKE_IKKUNA_MS) {
+			// Liike ei riittänyt aikaikkunassa: hylätään
+			liike_nollaa();
+		}
+		break;
+
+	default:
+		liike_nollaa();
+		break;
+	}
+	return symboli;
+}
+
+// ---------------------------------------------------------------------------
+// Viestin kokoaminen, napit ja palaute
+// ---------------------------------------------------------------------------
+
+// Näyttää kokoamisen alla olevan viestin (morse-merkit) näytöllä
+static void nayta_teksti(char viesti[]) {
+	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
+		lcd_viesti(viesti);
+		xSemaphoreGive(i2cMutex);
+	}
+}
+
+// Palaute lähetyksestä: teksti näytölle ja LED.
+// Onnistuminen = kolme lyhyttä välähdystä, virhe = yksi pitkä valo.
+static void ilmoita(const char *teksti, bool onnistui) {
+	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
+		clear_display();
+		write_text_xy(0, 0, teksti);
+		xSemaphoreGive(i2cMutex);
+	}
+	if (onnistui) {
+		for (int i = 0; i < 3; i++) {
+			set_led_status(true);
+			vTaskDelay(pdMS_TO_TICKS(150));
+			set_led_status(false);
+			vTaskDelay(pdMS_TO_TICKS(150));
+		}
+	}
+	else {
+		set_led_status(true);
+		vTaskDelay(pdMS_TO_TICKS(800));
+		set_led_status(false);
+	}
+}
+
+// Lukee IMU:n, tallentaa tunnistetut merkit viestiin ja käsittelee napit:
+//   SW1 = välilyönti (1 = merkkiväli, 2 = sanaväli)
+//   SW2 = lähetä viesti työasemalle
+static void kirjoitus_task(void *arg) {
+	(void)arg;
+
+	char viesti[MAX_VIESTI];       // viesti, jota kootaan
+	int pituus = 0;
+	bool sw1Ennen = false;         // napin edellinen tila (nousevan reunan tunnistukseen)
+	bool sw2Ennen = false;
+	TickType_t edellinenNappi = 0; // edellisen painalluksen ajankohta
+	TickType_t edellinen = xTaskGetTickCount();
+
+	viesti[0] = '\0';
+
+	while (1) {
+		vTaskDelay(pdMS_TO_TICKS(IMU_JAKSO_MS));
+
+		// Edellisestä kierroksesta kulunut aika
+		TickType_t nyt = xTaskGetTickCount();
+		int dtMs = (int)((nyt - edellinen) * portTICK_PERIOD_MS);
+		edellinen = nyt;
+		if (dtMs > 100) {
+			dtMs = 100;
+		}
+
+		// --- IMU ---
+		float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0, lampo = 0;
+		int rc = -1;
+		if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+			rc = ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &lampo);
+			xSemaphoreGive(i2cMutex);
+		}
+		if (rc == 0) {
+			char symboli = liike_askel(ax, ay, az, dtMs);
+			if (symboli != 0 && pituus < MAX_VIESTI - 1) {
+				viesti[pituus] = symboli;
+				pituus++;
+				viesti[pituus] = '\0';
+				nayta_teksti(viesti);
+			}
+		}
+
+		// --- Napit (aktiivinen taso on korkea, joten tunnistetaan nouseva reuna) ---
+		bool sw1 = gpio_get(SW1_PIN);
+		bool sw2 = gpio_get(SW2_PIN);
+		bool sw1Painettu = sw1 && !sw1Ennen;
+		bool sw2Painettu = sw2 && !sw2Ennen;
+		sw1Ennen = sw1;
+		sw2Ennen = sw2;
+
+		// Suodatetaan napin värähtely: uutta painallusta ei hyväksytä heti edellisen jälkeen
+		if ((sw1Painettu || sw2Painettu)
+			&& (nyt - edellinenNappi) < pdMS_TO_TICKS(NAPPI_VIIVE_MS)) {
+			sw1Painettu = false;
+			sw2Painettu = false;
+		}
+		if (sw1Painettu || sw2Painettu) {
+			edellinenNappi = nyt;
+			// Painallus liikuttaa laitetta, joten odotetaan että se on taas paikallaan
+			liike_nollaa();
+		}
+
+		if (sw1Painettu) {
+			// Välilyönti vain, jos viestissä on jo merkkejä eikä lopussa ole jo kahta välilyöntiä
+			bool kaksiValia = (pituus >= 2 && viesti[pituus - 1] == ' ' && viesti[pituus - 2] == ' ');
+			if (pituus > 0 && !kaksiValia && pituus < MAX_VIESTI - 1) {
+				viesti[pituus] = ' ';
+				pituus++;
+				viesti[pituus] = '\0';
+				nayta_teksti(viesti);
+			}
+		}
+
+		if (sw2Painettu) {
+			// Viestin lopun välilyönnit poistetaan, laheta_viesti lisää protokollan lopun
+			while (pituus > 0 && viesti[pituus - 1] == ' ') {
+				pituus--;
+			}
+			viesti[pituus] = '\0';
+
+			if (pituus == 0) {
+				ilmoita("Empty message", false);
+			}
+			else if (!serial_is_connected()) {
+				ilmoita("No USB link", false);
+			}
+			else if (laheta_viesti(viesti)) {
+				ilmoita("Sent OK!", true);
+				pituus = 0;
+				viesti[0] = '\0';
+			}
+			else {
+				// Viesti jää talteen, joten lähetystä voi yrittää uudelleen
+				ilmoita("Send failed", false);
+			}
+			liike_nollaa();
+		}
+	}
+}
+
 int main() {
     stdio_init_all();
     // Uncomment this lines if you want to wait till the serial monitor is connected
@@ -310,6 +594,14 @@ int main() {
     }*/ 
     init_hat_sdk();
     sleep_ms(300); //Wait some time so initialization of USB and hat is done.
+
+    // Napit ja IMU. Mutex luodaan ennen taskeja.
+    init_sw1();
+    init_sw2();
+    if (init_ICM42670() == 0) {
+        ICM42670_start_with_default_values();
+    }
+    i2cMutex = xSemaphoreCreateMutex();
 
     TaskHandle_t myExampleTask = NULL;
     // Create the tasks with xTaskCreate
@@ -333,6 +625,7 @@ int main() {
 	// Jono luodaan ennen taskeja, jotta ne voivat käyttää sitä heti
 	viestiJono = xQueueCreate(4, MAX_VIESTI);
 	xTaskCreate(vastaanotto_task, "vastaanotto", DEFAULT_STACK_SIZE, NULL, 2, NULL);
+	xTaskCreate(kirjoitus_task, "kirjoitus", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
 	// Käynnistää USB-sarjaliikenteen. Heti perään vTaskStartScheduler.
 	serial_comm_init();
