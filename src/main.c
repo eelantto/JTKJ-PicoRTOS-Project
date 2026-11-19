@@ -117,8 +117,9 @@ void play_success_melody(void) {
     
     for (int i = 0; i < noteCount; i++) {
         buzzer_play_tone (melody[i], noteLength[i]);
+		buzzer_turn_off();
+		vTaskDelay(pdMS_TO_TICKS(40));
     }
-    buzzer_turn_off();
 }
 
 char morse_to_char(char *morseCharacter) {
@@ -572,6 +573,7 @@ static void kirjoitus_task(void *arg) {
 				ilmoita("No USB link", false);
 			}
 			else if (laheta_viesti(viesti)) {
+				play_success_melody();
 				ilmoita("Sent OK!", true);
 				pituus = 0;
 				viesti[0] = '\0';
@@ -593,6 +595,8 @@ int main() {
     }*/ 
     init_hat_sdk();
     sleep_ms(300); //Wait some time so initialization of USB and hat is done.
+
+	init_buzzer();
 
     // Napit ja IMU. Mutex luodaan ennen taskeja.
     init_sw1();
