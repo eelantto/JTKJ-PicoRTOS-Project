@@ -471,6 +471,8 @@ static void ilmoita(const char *teksti, bool onnistui) {
 		xSemaphoreGive(i2cMutex);
 	}
 	if (onnistui) {
+		play_success_melody();
+		
 		for (int i = 0; i < 3; i++) {
 			set_led_status(true);
 			vTaskDelay(pdMS_TO_TICKS(150));
@@ -573,7 +575,6 @@ static void kirjoitus_task(void *arg) {
 				ilmoita("No USB link", false);
 			}
 			else if (laheta_viesti(viesti)) {
-				play_success_melody();
 				ilmoita("Sent OK!", true);
 				pituus = 0;
 				viesti[0] = '\0';
