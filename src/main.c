@@ -24,7 +24,7 @@
 #define NOTE_D6 1175
 #define NOTE_G6 1568
 
-#define MORSE_UNIT_MS 240
+#define MORSE_UNIT_MS 300
 #define MAX_MSG 128
 
 // IMU motion detection initial settings (acceleration in g-units).
@@ -195,10 +195,10 @@ static void led_msg(char msg[]) {
 		char m = msg[i];
 		
 		if (m == '-') {
-			//LED on 720ms
+			//LED on 900ms
 			set_led_status(true);
 			vTaskDelay(pdMS_TO_TICKS(3*MORSE_UNIT_MS));
-			//LED off 240ms (space)
+			//LED off 300ms (space)
 			set_led_status(false);
 			vTaskDelay(pdMS_TO_TICKS(MORSE_UNIT_MS));
 
