@@ -126,7 +126,7 @@ char morse_to_char(char *morseCharacter) {
             return morseAlphabet[i].character;
         }
     }
-    return '!';
+    return '!'; //invalid character
 }
 
 void morse_to_string(const char *morseText, char *decodedText) {
@@ -150,7 +150,7 @@ void morse_to_string(const char *morseText, char *decodedText) {
                     decodedText[k] = morse_to_char(temporary);
                 }
                 else {
-                    decodedText[k] = '!';   // segment too long, invalid character
+                    decodedText[k] = '!';   // segment too long
                 }
                 k++;
                 j = 0;
@@ -172,14 +172,6 @@ void morse_to_string(const char *morseText, char *decodedText) {
 
 
 
-static void example_task(void *arg){
-    (void)arg;
-
-    for(;;){
-        tight_loop_contents(); // Modify with application code here.
-        vTaskDelay(pdMS_TO_TICKS(2000));
-    }
-}
 
 static void led_msg(char msg[]) {
 	
@@ -259,14 +251,14 @@ static void show_lines(const char *text, int y, int maxLINES) {
 	int length = strlen(text);
 
 	for (int i = 0, r = 0; i < length && r < maxLINES; i += 21, r++) {
-		int maara = length - i;
-		if (maara > 21) {
-			maara = 21;
+		int amount = length - i;
+		if (amount > 21) {
+			amount = 21;
 		}
-		char rivi[22];
-		memcpy(rivi, text + i, maara);
-		rivi[maara] = '\0';
-		write_text_xy(0, y, rivi);
+		char line[22];
+		memcpy(line, text + i, amount);
+		line[amount] = '\0';
+		write_text_xy(0, y, line);
 		y += 8;
 	}
 }
@@ -358,40 +350,38 @@ bool send_message(const char *morse) {
 	return true;
 }
 
-// ---------------------------------------------------------------------------
+
 // IMU
-// ---------------------------------------------------------------------------
 
 /*
 State machine:
-    STATIONARY_MOTION  Waiting for the device to remain stationary for STATIONARY_MS.
-                      This is the initial state upon startup; therefore,
-                      the orientation at the moment of startup does not trigger a symbol.
+    STATIONARY_MOTION  Waiting for the device to remain stationary for STATIONARY_MS. This is the initial state upon startup.
     MOTION_READY       The device is stationary; waiting for motion.
     MOTION_IN_PROGRESS Motion has begun; the magnitude of motion is accumulated over a duration of MOTION_WINDOW_MS.
     Transitions:
-        STATIONARY -> READY       The device has remained stationary for a sufficient duration.
-        READY      -> IN_PROGRESS  Acceleration deviates from the resting value by more than MOTION_START_G.
-        IN_PROGRESS -> STATIONARY  The accumulated motion is sufficient (a symbol is recorded) or the time window expires.
-*/
+        STATIONARY -> READY       
+        READY      -> IN_PROGRESS  
+        IN_PROGRESS -> STATIONARY  
+*/		
 
 enum motion_state { STATIONARY_MOTION = 1, MOTION_READY, MOTION_IN_PROGRESS };
 
 static enum motion_state motionState = STATIONARY_MOTION;
 static bool referenceExists = false;       // is the rest value (reference position) set
-static float refX, refY, refZ;         // resting value, i.e., the device's position while stationary
+static float refX, refY, refZ;         // the device's position while stationary
 static int stationaryMs = 0;           // how long the device has been in place
 static float motionSum = 0.0f;        // amount of motion (g*ms), sign indicates direction
 static int motionMs = 0;                // time elapsed since the start of the movement
 
-// Forces the state machine to wait for a stationary state (e.g., after a button press)
+// Forces the state machine to wait for a stationary state
 static void motion_reset(void) {
 	motionState = STATIONARY_MOTION;
 	referenceExists = false;
 }
-
-// Processes one IMU sample. Returns '.' or '-', when motion is detected,
-// otherwise 0. dtMs is the time elapsed since the previous sample.
+/*
+Processes one IMU sample. Returns '.' or '-', when motion is detected,
+otherwise 0. dtMs is the time elapsed since the previous sample.
+*/
 static char motion_step(float ax, float ay, float az, int dtMs) {
 	char symbol = 0;
 	float axle = MOTION_AXLE(ax, ay, az);
@@ -448,9 +438,8 @@ static char motion_step(float ax, float ay, float az, int dtMs) {
 	return symbol;
 }
 
-// ---------------------------------------------------------------------------
+
 // Message assembly, buttons, and feedback
-// ---------------------------------------------------------------------------
 
 // Displays the message being assembled (morse code) on the display
 static void show_text(char message[]) {
@@ -605,20 +594,7 @@ int main() {
     }
     i2cMutex = xSemaphoreCreateMutex();
 
-    TaskHandle_t myExampleTask = NULL;
-    // Create the tasks with xTaskCreate
-    BaseType_t result = xTaskCreate(example_task,       // (en) Task function
-                "example",              // (en) Name of the task 
-                DEFAULT_STACK_SIZE, // (en) Size of the stack for this task (in words). Generally 1024 or 2048
-                NULL,               // (en) Arguments of the task 
-                2,                  // (en) Priority of this task
-                &myExampleTask);    // (en) A handle to control the execution of this task
-
-    if(result != pdPASS) {
-        printf("Example Task creation failed\n");
-        return 0;
-    }
-
+    
     TaskHandle_t hDisplay = NULL;
 
 	//Giving the task to FreeRTOS

@@ -29,9 +29,8 @@ USB serial communication with a workstation.
 #define RX_QUEUE_LEN 128   
 #define DEBUG_BUF_SIZE 96 
 
-// ------------------------------------------------------------------ 
+
 // Transmit task state machine                                             
-// ------------------------------------------------------------------ 
 
 /*
  States:
@@ -61,9 +60,9 @@ static QueueHandle_t rxQueue = NULL;
 // Check if the debug library (CDC0) been successfully initialized
 static bool debugReady = false;
 
-// ------------------------------------------------------------------ 
-// Helper functions                                                       
-// ------------------------------------------------------------------ 
+
+// Helper functions                                                    
+
 
 // Check if the character is a permitted Morse symbol
 static bool is_valid_symbol(char c) {
@@ -95,9 +94,8 @@ static bool write_symbol(char symbol) {
     return true;
 }
 
-// ------------------------------------------------------------------
+
 // Tasks                                                    
-// ------------------------------------------------------------------ 
 
 /*
  USB stack task. In FreeRTOS 'tud_task()' handles event waiting internally,
@@ -172,9 +170,9 @@ static void serialTxTask(void *arg) {
     }
 }
 
-// ------------------------------------------------------------------ 
+
 // Reception                                                       
-// ------------------------------------------------------------------ 
+
 
 /*
  TinyUSB calls this function when data has arrived on a CDC interface.
@@ -206,9 +204,9 @@ void tud_cdc_rx_cb(uint8_t itf) {
     }
 }
 
-// ------------------------------------------------------------------ 
+
 // Public interface                                                 
-// ------------------------------------------------------------------ 
+
 
 void serial_comm_init(void) {
     
