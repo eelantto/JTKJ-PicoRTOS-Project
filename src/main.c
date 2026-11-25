@@ -33,16 +33,12 @@
 #define MOTION_AMOUNT_G_MS 25.0f    // movement amount (g*ms), which generates a signal
 #define MOTION_WINDOW_MS 300       // time within which the movement amount must be met
 #define STATIONARY_G 0.06f        // any change smaller than this is interpreted as being stationary
-#define STATIONARY_MS 600         // for how long the device must remain stationary before the next signal
+#define STATIONARY_MS 400         // for how long the device must remain stationary before the next signal
 #define BUTTON_DELAY_MS 120        // button vibration filtering
 // The direction of motion is measured along the x-axis: positive = '.', negative = '-'.
 // If the directions are reversed, change the sign in the macro below (ax -> -ax).
 
 #define MOTION_AXLE(ax, ay, az) (ax)
-
-//Add here necessary states
-enum state { IDLE, SEND_DATA, RECEIVE_DATA };
-enum state programState = IDLE;
 
 static void led_msg(char msg[]);
 static void lcd_msg(char msg[]);
