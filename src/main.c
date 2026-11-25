@@ -17,7 +17,7 @@
 Claude AI was used to find and solve errors in this code.
 
 Responsibilities of the team members:
--Eero Lantto: Transmission of symbols to a workstation via USB serial communication, receiving messages from a workstation
+-Eero Lantto: Transmission of symbols to a workstation via USB serial communication, receiving messages from a workstation. I used Claude AI in troubleshooting.
 -Veeti Nymann: Displaying symbols using an LED and an LCD
 -Antton Leppänen: Feedback upon message transmission, and conversion of Morse symbols into letters
 
@@ -49,7 +49,6 @@ Responsibilities of the team members:
 #define STATIONARY_MS 400         // for how long the device must remain stationary before the next signal
 #define BUTTON_DELAY_MS 120        // button vibration filtering
 // The direction of motion is measured along the x-axis: positive = '.', negative = '-'.
-// If the directions are reversed, change the sign in the macro below (ax -> -ax).
 
 #define MOTION_AXLE(ax, ay, az) (ax)
 
@@ -223,8 +222,7 @@ static void led_msg(char msg[]) {
 }
 
 
-// Writes the text on the screen line by line (21 characters/line) starting from y.
-// Uses at most maxRows rows. The caller must hold the i2cMutex.
+// Writes the text on the screen line by line (21 characters/line) starting from y. Uses at most maxRows rows.
 static void show_lines(const char *text, int y, int maxLINES) {
 	int length = strlen(text);
 
@@ -252,7 +250,6 @@ static void lcd_msg(char msg[]) {
 }
 
 // Displays the received message: letters at the top, morse code at the bottom.
-// The caller must hold the i2cMutex.
 static void show_received(const char *morse, const char *text) {
 	clear_display();
 	show_lines(text, 0, 3);     // lines 1–3: letters
@@ -275,7 +272,7 @@ static void display_task(void *arg) {
 	init_led();
 
 	while(1) {
-		//Read the message and wait indefinitely
+		//Read the message and wait
 		if(xQueueReceive(msgQueue, message, portMAX_DELAY) == pdTRUE) {
 			//Decode the message into individual letters and display it on the LCD and LED
 			morse_to_string(message, text);
@@ -318,7 +315,7 @@ static void reception_task(void *arg) {
 }
 
 // Sends a morse message to the workstation and appends two spaces and a line break. Returns true if the transmission is successful.
-// Called from a task (e.g., after a button press).
+// Called from a task (e.g. after a button is pressed).
 bool send_message(const char *morse) {
 	if (!serial_is_connected()) {
 		return false;
@@ -327,7 +324,7 @@ bool send_message(const char *morse) {
 		serial_tx_clear();
 		return false;
 	}
-	// Wait for at most 1 s for all data to be written to USB
+	// Wait for max 1 s for all data to be written to USB
 	for (int i = 0; i < 100 && !serial_tx_idle(); i++) {
 		vTaskDelay(pdMS_TO_TICKS(10));
 	}
@@ -343,13 +340,14 @@ bool send_message(const char *morse) {
 
 /*
 State machine:
-    STATIONARY_MOTION  Waiting for the device to remain stationary for STATIONARY_MS. This is the initial state upon startup.
-    MOTION_READY       The device is stationary; waiting for motion.
-    MOTION_IN_PROGRESS Motion has begun; the magnitude of motion is accumulated over a duration of MOTION_WINDOW_MS.
-    Transitions:
-        STATIONARY -> READY       
-        READY      -> IN_PROGRESS  
-        IN_PROGRESS -> STATIONARY  
+    STATIONARY_MOTION: Waiting for the device to remain stationary for STATIONARY_MS. This is the initial state on startup.
+    MOTION_READY: The device is stationary. Waiting for motion.
+    MOTION_IN_PROGRESS: Motion has begun; the magnitude of motion is accumulated over a duration of MOTION_WINDOW_MS.
+    
+	Transitions:
+        STATIONARY_MOTION -> MOTION_READY       
+        MOTION_READY -> MOTION_IN_PROGRESS  
+        MOTION_IN_PROGRESS -> STATIONARY_MOTION  
 */		
 
 enum motion_state { STATIONARY_MOTION = 1, MOTION_READY, MOTION_IN_PROGRESS };
@@ -359,7 +357,7 @@ static bool referenceExists = false;       // is the rest value (reference posit
 static float refX, refY, refZ;         // the device's position while stationary
 static int stationaryMs = 0;           // how long the device has been in place
 static float motionSum = 0.0f;        // amount of motion (g*ms), sign indicates direction
-static int motionMs = 0;                // time elapsed since the start of the movement
+static int motionMs = 0;                // time since the start of the movement
 
 // Forces the state machine to wait for a stationary state
 static void motion_reset(void) {
@@ -368,7 +366,7 @@ static void motion_reset(void) {
 }
 /*
 Processes one IMU sample. Returns '.' or '-', when motion is detected,
-otherwise 0. dtMs is the time elapsed since the previous sample.
+otherwise 0. dtMs is the time since the previous sample.
 */
 static char motion_step(float ax, float ay, float az, int dtMs) {
 	char symbol = 0;
@@ -462,9 +460,11 @@ static void notify(const char *text, bool success) {
 	}
 }
 
-// Reads the IMU, saves the detected characters to the message, and processes the buttons:
-//   SW1 = space (1 = character space, 2 = word space)
-//   SW2 = send message to workstation
+/*
+Reads the IMU, saves the detected characters to the message, and processes the buttons:
+ SW1 = space 
+ SW2 = send message to workstation
+*/
 static void write_task(void *arg) {
 	(void)arg;
 
@@ -480,7 +480,7 @@ static void write_task(void *arg) {
 	while (1) {
 		vTaskDelay(pdMS_TO_TICKS(IMU_INTERVAL_MS));
 
-		// Time elapsed since the previous iteration
+		// Time since the previous iteration
 		TickType_t now = xTaskGetTickCount();
 		int dtMs = (int)((now - previous) * portTICK_PERIOD_MS);
 		previous = now;
@@ -488,7 +488,7 @@ static void write_task(void *arg) {
 			dtMs = 100;
 		}
 
-		// --- IMU ---
+		// IMU
 		float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0, temp = 0;
 		int rc = -1;
 		if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
@@ -505,7 +505,7 @@ static void write_task(void *arg) {
 			}
 		}
 
-		// --- Buttons (active level is high, so rising edge is detected) ---
+		// Buttons (active level is high, so rising edge is detected) 
 		bool sw1 = gpio_get(SW1_PIN);
 		bool sw2 = gpio_get(SW2_PIN);
 		bool sw1Pressed = sw1 && !sw1Before;
@@ -513,7 +513,7 @@ static void write_task(void *arg) {
 		sw1Before = sw1;
 		sw2Before = sw2;
 
-		// Filter button noise: new press is not accepted immediately after the previous one
+		// new press is not accepted immediately after the previous one
 		if ((sw1Pressed || sw2Pressed)
 			&& (now - previousButtonPress) < pdMS_TO_TICKS(BUTTON_DELAY_MS)) {
 			sw1Pressed = false;
@@ -537,7 +537,7 @@ static void write_task(void *arg) {
 		}
 
 		if (sw2Pressed) {
-			// Remove trailing spaces from the message and add the protocol footer
+			// Remove trailing spaces from the message
 			while (length > 0 && message[length - 1] == ' ') {
 				length--;
 			}
@@ -565,10 +565,12 @@ static void write_task(void *arg) {
 
 int main() {
     stdio_init_all();
-    // Uncomment this lines if you want to wait till the serial monitor is connected
-    /*while (!stdio_usb_connected()){
+    // Uncomment these if you want to wait till the serial monitor is connected
+    /*
+	while (!stdio_usb_connected()){
         sleep_ms(10);
-    }*/ 
+    }
+	*/ 
     init_hat_sdk();
     sleep_ms(300); //Wait some time so initialization of USB and hat is done.
 
@@ -593,7 +595,7 @@ int main() {
 	xTaskCreate(reception_task, "reception", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 	xTaskCreate(write_task, "write", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
-	// Initializes USB serial communication. Followed immediately by vTaskStartScheduler.
+	// Initializes USB serial communication.
 	serial_comm_init();
 
     // Start the scheduler (never returns)
