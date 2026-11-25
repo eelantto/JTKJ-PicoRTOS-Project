@@ -13,6 +13,8 @@
 #include "tkjhat/sdk.h"
 #include "serial_comm.h"
 
+/* Claude AI was used to generate the initial version of this code. The code was then modified and improved by the students.*/
+
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
 
@@ -208,42 +210,7 @@ static void led_msg(char msg[]) {
 		}
 	}
 }
-static void lcd_msg(char msg[]) {
-		
 
-	
-	//Clear LCD
-	clear_display();
-	
-	//Message length
-	int length = strlen(msg);
-	
-	int coord_y = 0;
-	
-	for (int i = 0; i < length; i += 21) {
-		//Checking how many symbols are yet to be shown
-		int amount = length - i;
-		if (amount > 21) {
-			amount = 21;
-		}
-		//Making space for 21 symbols +  '\0'
-		char row[22]; 
-		//Copying a row of symbols or the rest of the message
-		memcpy(row, msg + i, amount);
-		//Adding '\0'
-		row[amount] = '\0';
-		//Typing the msg on the LCD
-		//Symbols per row is 128/6 = 21.3 -> 21
-		//Rows in total: 64/8 = 8
-		//Symbols in total 8*21 168 per message
-		write_text_xy(0, coord_y, row);
-		coord_y += 8;
-		//ENding the loop if message length is more than the LCD can hold
-		if(coord_y >= 64) {
-			break;
-		}
-	}
-}
 
 // Writes the text on the screen line by line (21 characters/line) starting from y.
 // Uses at most maxRows rows. The caller must hold the i2cMutex.
@@ -261,6 +228,16 @@ static void show_lines(const char *text, int y, int maxLINES) {
 		write_text_xy(0, y, line);
 		y += 8;
 	}
+}
+
+static void lcd_msg(char msg[]) {
+		
+
+	
+	//Clear LCD
+	clear_display();
+	show_lines(msg, 0, 8);
+	
 }
 
 // Displays the received message: letters at the top, morse code at the bottom.
@@ -329,7 +306,7 @@ static void reception_task(void *arg) {
 	}
 }
 
-// Sends a morse message to the workstation (e.g., "... --- ...") and appends two spaces and a line break. Returns true if the transmission is successful.
+// Sends a morse message to the workstation and appends two spaces and a line break. Returns true if the transmission is successful.
 // Called from a task (e.g., after a button press).
 bool send_message(const char *morse) {
 	if (!serial_is_connected()) {
