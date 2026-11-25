@@ -28,17 +28,17 @@
 #define MAX_MSG 128
 
 // IMU motion detection initial settings (acceleration in g-units).
-#define IMU_JAKSO_MS 20           // IMU reading interval
-#define LIIKE_ALKU_G 0.15f        // movement begins when the acceleration deviates from the resting value by this much
-#define LIIKE_SUMMA_G_MS 25.0f    // movement amount (g*ms), which generates a signal
-#define LIIKE_IKKUNA_MS 300       // time within which the movement amount must be met
-#define PAIKALLAAN_G 0.06f        // any change smaller than this is interpreted as being stationary
-#define PAIKALLAAN_MS 600         // for how long the device must remain stationary before the next signal
-#define NAPPI_VIIVE_MS 120        // button vibration filtering
+#define IMU_INTERVAL_MS 20           // IMU reading interval
+#define MOTION_START_G 0.15f        // movement begins when the acceleration deviates from the resting value by this much
+#define MOTION_AMOUNT_G_MS 25.0f    // movement amount (g*ms), which generates a signal
+#define MOTION_WINDOW_MS 300       // time within which the movement amount must be met
+#define STATIONARY_G 0.06f        // any change smaller than this is interpreted as being stationary
+#define STATIONARY_MS 600         // for how long the device must remain stationary before the next signal
+#define BUTTON_DELAY_MS 120        // button vibration filtering
 // The direction of motion is measured along the x-axis: positive = '.', negative = '-'.
 // If the directions are reversed, change the sign in the macro below (ax -> -ax).
 
-#define LIIKE_AKSELI(ax, ay, az) (ax)
+#define MOTION_AXLE(ax, ay, az) (ax)
 
 //Add here necessary states
 enum state { IDLE, SEND_DATA, RECEIVE_DATA };
@@ -47,14 +47,14 @@ enum state programState = IDLE;
 static void led_msg(char msg[]);
 static void lcd_msg(char msg[]);
 static void display_task(void *arg);
-static void vastaanotto_task(void *arg);
+static void reception_task(void *arg);
 
 // Queue used to pass the received message to display_task
 static QueueHandle_t msgQueue = NULL;
 
 // The I2C bus is shared between the display and the IMU, so access is protected by a mutex.
 static SemaphoreHandle_t i2cMutex = NULL;
-static void kirjoitus_task(void *arg);
+static void write_task(void *arg);
 
 // Note sequence and durations for the success melody
 int melody[] = {
@@ -259,16 +259,16 @@ static void lcd_msg(char msg[]) {
 
 // Writes the text on the screen line by line (21 characters/line) starting from y.
 // Uses at most maxRows rows. The caller must hold the i2cMutex.
-static void nayta_rivit(const char *teksti, int y, int maxRivit) {
-	int pituus = strlen(teksti);
+static void show_lines(const char *text, int y, int maxLINES) {
+	int length = strlen(text);
 
-	for (int i = 0, r = 0; i < pituus && r < maxRivit; i += 21, r++) {
-		int maara = pituus - i;
+	for (int i = 0, r = 0; i < length && r < maxLINES; i += 21, r++) {
+		int maara = length - i;
 		if (maara > 21) {
 			maara = 21;
 		}
 		char rivi[22];
-		memcpy(rivi, teksti + i, maara);
+		memcpy(rivi, text + i, maara);
 		rivi[maara] = '\0';
 		write_text_xy(0, y, rivi);
 		y += 8;
@@ -277,10 +277,10 @@ static void nayta_rivit(const char *teksti, int y, int maxRivit) {
 
 // Displays the received message: letters at the top, morse code at the bottom.
 // The caller must hold the i2cMutex.
-static void nayta_vastaanotettu(const char *morse, const char *teksti) {
+static void show_received(const char *morse, const char *text) {
 	clear_display();
-	nayta_rivit(teksti, 0, 3);     // lines 1–3: letters
-	nayta_rivit(morse, 32, 4);     // lines 5-8: morse symbols
+	show_lines(text, 0, 3);     // lines 1–3: letters
+	show_lines(morse, 32, 4);     // lines 5-8: morse symbols
 }
 
 static void display_task(void *arg) {
@@ -288,9 +288,9 @@ static void display_task(void *arg) {
 	(void)arg;
 
 	//Copying the message
-	char viesti[MAX_MSG];
+	char message[MAX_MSG];
 	//Message broken down into individual letters
-	char teksti[MAX_MSG];
+	char text[MAX_MSG];
 
 	//Initialize the LED and LCD (the display uses a shared I2C bus)
 	xSemaphoreTake(i2cMutex, portMAX_DELAY);
@@ -300,42 +300,42 @@ static void display_task(void *arg) {
 
 	while(1) {
 		//Read the message and wait indefinitely
-		if(xQueueReceive(msgQueue, viesti, portMAX_DELAY) == pdTRUE) {
+		if(xQueueReceive(msgQueue, message, portMAX_DELAY) == pdTRUE) {
 			//Decode the message into individual letters and display it on the LCD and LED
-			morse_to_string(viesti, teksti);
+			morse_to_string(message, text);
 			if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
-				nayta_vastaanotettu(viesti, teksti);
+				show_received(message, text);
 				xSemaphoreGive(i2cMutex);
 			}
-			led_msg(viesti);
+			led_msg(message);
 		}
 	}
 }
 
 // Collects symbols received from the workstation and forms a message to be displayed on the screen/LED.
 // The message ends with a line break ('\n'), and any preceding spaces are removed.
-static void vastaanotto_task(void *arg) {
+static void reception_task(void *arg) {
 	(void)arg;
 
-	char viesti[MAX_MSG];
-	int pituus = 0;
+	char message[MAX_MSG];
+	int length = 0;
 	char c;
 
 	while (1) {
 		if (serial_receive_symbol(&c, pdMS_TO_TICKS(100))) {
 			if (c == '\n') {
-				while (pituus > 0 && viesti[pituus - 1] == ' ') {
-					pituus--;
+				while (length > 0 && message[length - 1] == ' ') {
+					length--;
 				}
-				viesti[pituus] = '\0';
-				if (pituus > 0) {
-					xQueueSend(msgQueue, viesti, 0);
+				message[length] = '\0';
+				if (length > 0) {
+					xQueueSend(msgQueue, message, 0);
 				}
-				pituus = 0;
+				length = 0;
 			}
-			else if (pituus < MAX_MSG - 1) {
-				viesti[pituus] = c;
-				pituus++;
+			else if (length < MAX_MSG - 1) {
+				message[length] = c;
+				length++;
 			}
 		}
 	}
@@ -343,7 +343,7 @@ static void vastaanotto_task(void *arg) {
 
 // Sends a morse message to the workstation (e.g., "... --- ...") and appends two spaces and a line break. Returns true if the transmission is successful.
 // Called from a task (e.g., after a button press).
-bool laheta_viesti(const char *morse) {
+bool send_message(const char *morse) {
 	if (!serial_is_connected()) {
 		return false;
 	}
@@ -379,77 +379,77 @@ State machine:
         IN_PROGRESS -> STATIONARY  The accumulated motion is sufficient (a symbol is recorded) or the time window expires.
 */
 
-enum liike_tila { LIIKE_PAIKALLAAN = 1, LIIKE_VALMIS, LIIKE_KESKEN };
+enum motion_state { STATIONARY_MOTION = 1, MOTION_READY, MOTION_IN_PROGRESS };
 
-static enum liike_tila liikeTila = LIIKE_PAIKALLAAN;
-static bool refOlemassa = false;       // is the rest value (reference position) set
+static enum motion_state motionState = STATIONARY_MOTION;
+static bool referenceExists = false;       // is the rest value (reference position) set
 static float refX, refY, refZ;         // resting value, i.e., the device's position while stationary
-static int paikallaanMs = 0;           // how long the device has been in place
-static float liikeSumma = 0.0f;        // amount of motion (g*ms), sign indicates direction
-static int liikeMs = 0;                // time elapsed since the start of the movement
+static int stationaryMs = 0;           // how long the device has been in place
+static float motionSum = 0.0f;        // amount of motion (g*ms), sign indicates direction
+static int motionMs = 0;                // time elapsed since the start of the movement
 
 // Forces the state machine to wait for a stationary state (e.g., after a button press)
-static void liike_nollaa(void) {
-	liikeTila = LIIKE_PAIKALLAAN;
-	refOlemassa = false;
+static void motion_reset(void) {
+	motionState = STATIONARY_MOTION;
+	referenceExists = false;
 }
 
 // Processes one IMU sample. Returns '.' or '-', when motion is detected,
 // otherwise 0. dtMs is the time elapsed since the previous sample.
-static char liike_askel(float ax, float ay, float az, int dtMs) {
-	char symboli = 0;
-	float akseli = LIIKE_AKSELI(ax, ay, az);
-	float akseliRef = LIIKE_AKSELI(refX, refY, refZ);
+static char motion_step(float ax, float ay, float az, int dtMs) {
+	char symbol = 0;
+	float axle = MOTION_AXLE(ax, ay, az);
+	float axleRef = MOTION_AXLE(refX, refY, refZ);
 
-	switch (liikeTila) {
+	switch (motionState) {
 
-	case LIIKE_PAIKALLAAN:
+	case STATIONARY_MOTION:
 		// If the orientation changes, the reference position and timing are reset
-		if (!refOlemassa
-			|| fabsf(ax - refX) > PAIKALLAAN_G
-			|| fabsf(ay - refY) > PAIKALLAAN_G
-			|| fabsf(az - refZ) > PAIKALLAAN_G) {
+		if (!referenceExists
+			|| fabsf(ax - refX) > STATIONARY_G
+			|| fabsf(ay - refY) > STATIONARY_G
+			|| fabsf(az - refZ) > STATIONARY_G) {
 			refX = ax;
 			refY = ay;
 			refZ = az;
-			refOlemassa = true;
-			paikallaanMs = 0;
+			referenceExists = true;
+			stationaryMs = 0;
 		}
 		else {
-			paikallaanMs += dtMs;
-			if (paikallaanMs >= PAIKALLAAN_MS) {
-				liikeTila = LIIKE_VALMIS;
+			stationaryMs += dtMs;
+			if (stationaryMs >= STATIONARY_MS) {
+				motionState = MOTION_READY;
 			}
 		}
 		break;
 
-	case LIIKE_VALMIS:
-		if (fabsf(akseli - akseliRef) > LIIKE_ALKU_G) {
-			liikeSumma = (akseli - akseliRef) * dtMs;
-			liikeMs = dtMs;
-			liikeTila = LIIKE_KESKEN;
+	case MOTION_READY:
+		if (fabsf(axle - axleRef) > MOTION_START_G) {
+			motionSum = (axle - axleRef) * dtMs;
+			motionMs = dtMs;
+			motionState = MOTION_IN_PROGRESS;
 		}
 		break;
 
-	case LIIKE_KESKEN:
-		liikeSumma += (akseli - akseliRef) * dtMs;
-		liikeMs += dtMs;
-		if (fabsf(liikeSumma) >= LIIKE_SUMMA_G_MS) {
+	case MOTION_IN_PROGRESS:
+		motionSum += (axle - axleRef) * dtMs;
+		motionMs += dtMs;
+		if (fabsf(motionSum) >= MOTION_AMOUNT_G_MS) {
 			// Sufficient movement: the direction determines the sign
-			symboli = (liikeSumma > 0) ? '.' : '-';
-			liike_nollaa();
+			symbol = (motionSum > 0) ? '.' : '-';
+			motion_reset();
 		}
-		else if (liikeMs >= LIIKE_IKKUNA_MS) {
+		else if (motionMs >= MOTION_WINDOW_MS) {
 			// Insufficient movement within the time window: rejected
-			liike_nollaa();
+			motion_reset();
 		}
 		break;
 
 	default:
-		liike_nollaa();
+		motion_reset();
 		break;
 	}
-	return symboli;
+	return symbol;
 }
 
 // ---------------------------------------------------------------------------
@@ -457,22 +457,22 @@ static char liike_askel(float ax, float ay, float az, int dtMs) {
 // ---------------------------------------------------------------------------
 
 // Displays the message being assembled (morse code) on the display
-static void nayta_teksti(char viesti[]) {
+static void show_text(char message[]) {
 	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
-		lcd_msg(viesti);
+		lcd_msg(message);
 		xSemaphoreGive(i2cMutex);
 	}
 }
 
 // Feedback on transmission: text on the display and an LED.
 // Success = three short flashes, error = one long light.
-static void ilmoita(const char *teksti, bool onnistui) {
+static void notify(const char *text, bool success) {
 	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
 		clear_display();
-		write_text_xy(0, 0, teksti);
+		write_text_xy(0, 0, text);
 		xSemaphoreGive(i2cMutex);
 	}
-	if (onnistui) {
+	if (success) {
 		play_success_melody();
 		
 		for (int i = 0; i < 3; i++) {
@@ -492,100 +492,100 @@ static void ilmoita(const char *teksti, bool onnistui) {
 // Reads the IMU, saves the detected characters to the message, and processes the buttons:
 //   SW1 = space (1 = character space, 2 = word space)
 //   SW2 = send message to workstation
-static void kirjoitus_task(void *arg) {
+static void write_task(void *arg) {
 	(void)arg;
 
-	char viesti[MAX_MSG];       // message being assembled
-	int pituus = 0;
-	bool sw1Ennen = false;         // button's previous state (for detecting rising edges)
-	bool sw2Ennen = false;
-	TickType_t edellinenNappi = 0; // time of the previous button press
-	TickType_t edellinen = xTaskGetTickCount();
+	char message[MAX_MSG];       // message being assembled
+	int length = 0;
+	bool sw1Before = false;         // button's previous state (for detecting rising edges)
+	bool sw2Before = false;
+	TickType_t previousButtonPress = 0; // time of the previous button press
+	TickType_t previous = xTaskGetTickCount();
 
-	viesti[0] = '\0';
+	message[0] = '\0';
 
 	while (1) {
-		vTaskDelay(pdMS_TO_TICKS(IMU_JAKSO_MS));
+		vTaskDelay(pdMS_TO_TICKS(IMU_INTERVAL_MS));
 
 		// Time elapsed since the previous iteration
-		TickType_t nyt = xTaskGetTickCount();
-		int dtMs = (int)((nyt - edellinen) * portTICK_PERIOD_MS);
-		edellinen = nyt;
+		TickType_t now = xTaskGetTickCount();
+		int dtMs = (int)((now - previous) * portTICK_PERIOD_MS);
+		previous = now;
 		if (dtMs > 100) {
 			dtMs = 100;
 		}
 
 		// --- IMU ---
-		float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0, lampo = 0;
+		float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0, temp = 0;
 		int rc = -1;
 		if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
-			rc = ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &lampo);
+			rc = ICM42670_read_sensor_data(&ax, &ay, &az, &gx, &gy, &gz, &temp);
 			xSemaphoreGive(i2cMutex);
 		}
 		if (rc == 0) {
-			char symboli = liike_askel(ax, ay, az, dtMs);
-			if (symboli != 0 && pituus < MAX_MSG - 1) {
-				viesti[pituus] = symboli;
-				pituus++;
-				viesti[pituus] = '\0';
-				nayta_teksti(viesti);
+			char symbol = motion_step(ax, ay, az, dtMs);
+			if (symbol != 0 && length < MAX_MSG - 1) {
+				message[length] = symbol;
+				length++;
+				message[length] = '\0';
+				show_text(message);
 			}
 		}
 
 		// --- Buttons (active level is high, so rising edge is detected) ---
 		bool sw1 = gpio_get(SW1_PIN);
 		bool sw2 = gpio_get(SW2_PIN);
-		bool sw1Painettu = sw1 && !sw1Ennen;
-		bool sw2Painettu = sw2 && !sw2Ennen;
-		sw1Ennen = sw1;
-		sw2Ennen = sw2;
+		bool sw1Pressed = sw1 && !sw1Before;
+		bool sw2Pressed = sw2 && !sw2Before;
+		sw1Before = sw1;
+		sw2Before = sw2;
 
 		// Filter button noise: new press is not accepted immediately after the previous one
-		if ((sw1Painettu || sw2Painettu)
-			&& (nyt - edellinenNappi) < pdMS_TO_TICKS(NAPPI_VIIVE_MS)) {
-			sw1Painettu = false;
-			sw2Painettu = false;
+		if ((sw1Pressed || sw2Pressed)
+			&& (now - previousButtonPress) < pdMS_TO_TICKS(BUTTON_DELAY_MS)) {
+			sw1Pressed = false;
+			sw2Pressed = false;
 		}
-		if (sw1Painettu || sw2Painettu) {
-			edellinenNappi = nyt;
+		if (sw1Pressed || sw2Pressed) {
+			previousButtonPress = now;
 			// Pressing the button moves the device, so we wait for it to settle again
-			liike_nollaa();
+			motion_reset();
 		}
 
-		if (sw1Painettu) {
+		if (sw1Pressed) {
 			// Add a space only if the message already contains characters and does not already end with two spaces
-			bool kaksiValia = (pituus >= 2 && viesti[pituus - 1] == ' ' && viesti[pituus - 2] == ' ');
-			if (pituus > 0 && !kaksiValia && pituus < MAX_MSG - 1) {
-				viesti[pituus] = ' ';
-				pituus++;
-				viesti[pituus] = '\0';
-				nayta_teksti(viesti);
+			bool twoSpace = (length >= 2 && message[length - 1] == ' ' && message[length - 2] == ' ');
+			if (length > 0 && !twoSpace && length < MAX_MSG - 1) {
+				message[length] = ' ';
+				length++;
+				message[length] = '\0';
+				show_text(message);
 			}
 		}
 
-		if (sw2Painettu) {
+		if (sw2Pressed) {
 			// Remove trailing spaces from the message and add the protocol footer
-			while (pituus > 0 && viesti[pituus - 1] == ' ') {
-				pituus--;
+			while (length > 0 && message[length - 1] == ' ') {
+				length--;
 			}
-			viesti[pituus] = '\0';
+			message[length] = '\0';
 
-			if (pituus == 0) {
-				ilmoita("Empty message", false);
+			if (length == 0) {
+				notify("Empty message", false);
 			}
 			else if (!serial_is_connected()) {
-				ilmoita("No USB link", false);
+				notify("No USB link", false);
 			}
-			else if (laheta_viesti(viesti)) {
-				ilmoita("Sent OK!", true);
-				pituus = 0;
-				viesti[0] = '\0';
+			else if (send_message(message)) {
+				notify("Sent OK!", true);
+				length = 0;
+				message[0] = '\0';
 			}
 			else {
 				// The message is saved, so you can try sending it again
-				ilmoita("Send failed", false);
+				notify("Send failed", false);
 			}
-			liike_nollaa();
+			motion_reset();
 		}
 	}
 }
@@ -630,8 +630,8 @@ int main() {
 
 	// The queue is created before the tasks so that they can use it immediately
 	msgQueue = xQueueCreate(4, MAX_MSG);
-	xTaskCreate(vastaanotto_task, "vastaanotto", DEFAULT_STACK_SIZE, NULL, 2, NULL);
-	xTaskCreate(kirjoitus_task, "kirjoitus", DEFAULT_STACK_SIZE, NULL, 2, NULL);
+	xTaskCreate(reception_task, "reception", DEFAULT_STACK_SIZE, NULL, 2, NULL);
+	xTaskCreate(write_task, "write", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
 	// Initializes USB serial communication. Followed immediately by vTaskStartScheduler.
 	serial_comm_init();
