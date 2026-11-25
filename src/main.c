@@ -13,7 +13,18 @@
 #include "tkjhat/sdk.h"
 #include "serial_comm.h"
 
-/* Claude AI was used to generate the initial version of this code. The code was then modified and improved by the students.*/
+/* 
+Claude AI was used to find and solve errors in this code.
+
+Responsibilities of the team members:
+-Eero Lantto: Transmission of symbols to a workstation via USB serial communication, receiving messages from a workstation
+-Veeti Nymann: Displaying symbols using an LED and an LCD
+-Antton Leppänen: Feedback upon message transmission, and conversion of Morse symbols into letters
+
+-IMU was made together. The initial IMU implementation was done with the help of Claude AI, but based on the code of the students.
+
+*/
+
 
 // Default stack size for the tasks. It can be reduced to 1024 if task is not using lot of memory.
 #define DEFAULT_STACK_SIZE 2048
