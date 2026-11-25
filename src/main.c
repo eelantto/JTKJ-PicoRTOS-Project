@@ -27,17 +27,17 @@
 #define MORSE_UNIT_MS 240
 #define MAX_MSG 128
 
-// IMU-liikkeentunnistuksen asetukset (kiihtyvyys g-yksikköinä).
-// Arvot ovat lähtöarvoja, ja ne säädetään kokeilemalla laitteella.
-#define IMU_JAKSO_MS 20           // IMU:n lukuväli
-#define LIIKE_ALKU_G 0.15f        // liike alkaa, kun kiihtyvyys poikkeaa näin paljon lepoarvosta
-#define LIIKE_SUMMA_G_MS 25.0f    // liikkeen määrä (g*ms), joka tuottaa merkin
-#define LIIKE_IKKUNA_MS 300       // aika, jonka sisällä liikkeen määrän täytyy täyttyä
-#define PAIKALLAAN_G 0.06f        // tätä pienempi muutos tulkitaan paikallaanoloksi
-#define PAIKALLAAN_MS 600         // näin kauan laitteen täytyy olla paikallaan ennen seuraavaa merkkiä
-#define NAPPI_VIIVE_MS 120        // nappien värähtelyn suodatus
-// Liikkeen suunta mitataan x-akselilta: positiivinen = '.', negatiivinen = '-'.
-// Jos suunnat ovat väärinpäin, vaihda alla olevan makron merkki (ax -> -ax).
+// IMU motion detection initial settings (acceleration in g-units).
+#define IMU_JAKSO_MS 20           // IMU reading interval
+#define LIIKE_ALKU_G 0.15f        // movement begins when the acceleration deviates from the resting value by this much
+#define LIIKE_SUMMA_G_MS 25.0f    // movement amount (g*ms), which generates a signal
+#define LIIKE_IKKUNA_MS 300       // time within which the movement amount must be met
+#define PAIKALLAAN_G 0.06f        // any change smaller than this is interpreted as being stationary
+#define PAIKALLAAN_MS 600         // for how long the device must remain stationary before the next signal
+#define NAPPI_VIIVE_MS 120        // button vibration filtering
+// The direction of motion is measured along the x-axis: positive = '.', negative = '-'.
+// If the directions are reversed, change the sign in the macro below (ax -> -ax).
+
 #define LIIKE_AKSELI(ax, ay, az) (ax)
 
 //Add here necessary states
@@ -49,10 +49,10 @@ static void lcd_msg(char msg[]);
 static void display_task(void *arg);
 static void vastaanotto_task(void *arg);
 
-// Jono, jolla vastaanotettu viesti siirretään display_task:lle
+// Queue used to pass the received message to display_task
 static QueueHandle_t msgQueue = NULL;
 
-// I2C-väylä on jaettu näytön ja IMU:n kesken, joten käyttö suojataan mutexilla
+// The I2C bus is shared between the display and the IMU, so access is protected by a mutex.
 static SemaphoreHandle_t i2cMutex = NULL;
 static void kirjoitus_task(void *arg);
 
@@ -140,7 +140,7 @@ void morse_to_string(const char *morseText, char *decodedText) {
     
     for (int i = 0; ; i++) {
         if (morseText[i] != ' ' && morseText[i] != '\0') {
-            // Tallennetaan enintään 5 merkkiä, ettei taulukko ylity
+            // Store a maximum of 5 characters to avoid exceeding the array
             if (j < 5) {
                 temporary[j] = morseText[i];
             }
@@ -154,7 +154,7 @@ void morse_to_string(const char *morseText, char *decodedText) {
                     decodedText[k] = morse_to_char(temporary);
                 }
                 else {
-                    decodedText[k] = '!';   // liian pitkä jakso, ei kelvollinen merkki
+                    decodedText[k] = '!';   // segment too long, invalid character
                 }
                 k++;
                 j = 0;
@@ -257,8 +257,8 @@ static void lcd_msg(char msg[]) {
 	}
 }
 
-// Kirjoittaa tekstin näytölle riveittäin (21 merkkiä/rivi) kohdasta y alkaen.
-// Käyttää enintään maxRivit riviä. Kutsujan on pidettävä i2cMutex.
+// Writes the text on the screen line by line (21 characters/line) starting from y.
+// Uses at most maxRows rows. The caller must hold the i2cMutex.
 static void nayta_rivit(const char *teksti, int y, int maxRivit) {
 	int pituus = strlen(teksti);
 
@@ -275,33 +275,33 @@ static void nayta_rivit(const char *teksti, int y, int maxRivit) {
 	}
 }
 
-// Näyttää vastaanotetun viestin: ylhäällä puretut kirjaimet, alhaalla morse-merkit.
-// Kutsujan on pidettävä i2cMutex.
+// Displays the received message: letters at the top, morse code at the bottom.
+// The caller must hold the i2cMutex.
 static void nayta_vastaanotettu(const char *morse, const char *teksti) {
 	clear_display();
-	nayta_rivit(teksti, 0, 3);     // rivit 1-3: kirjaimet
-	nayta_rivit(morse, 32, 4);     // rivit 5-8: morse-merkit
+	nayta_rivit(teksti, 0, 3);     // lines 1–3: letters
+	nayta_rivit(morse, 32, 4);     // lines 5-8: morse symbols
 }
 
 static void display_task(void *arg) {
-	//Jätetään arg huomiotta
+	//Ignore arg
 	(void)arg;
 
-	//Kopioidaan viesti
+	//Copying the message
 	char viesti[MAX_MSG];
-	//Viesti kirjaimiksi purettuna
+	//Message broken down into individual letters
 	char teksti[MAX_MSG];
 
-	//Alustetaan LED ja LCD (näyttö käyttää jaettua I2C-väylää)
+	//Initialize the LED and LCD (the display uses a shared I2C bus)
 	xSemaphoreTake(i2cMutex, portMAX_DELAY);
 	init_display();
 	xSemaphoreGive(i2cMutex);
 	init_led();
 
 	while(1) {
-		//Luetaan viesti ja ododtetaan 'ikuisesti'
+		//Read the message and wait indefinitely
 		if(xQueueReceive(msgQueue, viesti, portMAX_DELAY) == pdTRUE) {
-			//Puretaan viesti kirjaimiksi ja näytetään se LCD:llä ja LED:llä
+			//Decode the message into individual letters and display it on the LCD and LED
 			morse_to_string(viesti, teksti);
 			if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
 				nayta_vastaanotettu(viesti, teksti);
@@ -312,8 +312,8 @@ static void display_task(void *arg) {
 	}
 }
 
-// Kokoaa työasemalta tulevat symbolit viestiksi ja antaa sen näytölle/LEDille.
-// Viesti päättyy rivinvaihtoon ('\n'), jonka edellä olevat välilyönnit poistetaan.
+// Collects symbols received from the workstation and forms a message to be displayed on the screen/LED.
+// The message ends with a line break ('\n'), and any preceding spaces are removed.
 static void vastaanotto_task(void *arg) {
 	(void)arg;
 
@@ -341,9 +341,8 @@ static void vastaanotto_task(void *arg) {
 	}
 }
 
-// Lähettää morse-viestin työasemalle (esim. "... --- ...") ja lisää loppuun
-// kaksi välilyöntiä ja rivinvaihdon. Palauttaa true, jos lähetys onnistui.
-// Kutsutaan taskista (esim. napin painalluksen jälkeen).
+// Sends a morse message to the workstation (e.g., "... --- ...") and appends two spaces and a line break. Returns true if the transmission is successful.
+// Called from a task (e.g., after a button press).
 bool laheta_viesti(const char *morse) {
 	if (!serial_is_connected()) {
 		return false;
@@ -352,7 +351,7 @@ bool laheta_viesti(const char *morse) {
 		serial_tx_clear();
 		return false;
 	}
-	// Odotetaan enintään 1 s, että kaikki on kirjoitettu USB:lle
+	// Wait for at most 1 s for all data to be written to USB
 	for (int i = 0; i < 100 && !serial_tx_idle(); i++) {
 		vTaskDelay(pdMS_TO_TICKS(10));
 	}
@@ -364,36 +363,39 @@ bool laheta_viesti(const char *morse) {
 }
 
 // ---------------------------------------------------------------------------
-// Liikkeen tunnistus (IMU)
+// IMU
 // ---------------------------------------------------------------------------
 
-// Tilakone:
-//   LIIKE_PAIKALLAAN  odotetaan, että laite on ollut PAIKALLAAN_MS paikallaan.
-//                     Tässä tilassa aloitetaan myös käynnistyksessä, joten
-//                     käynnistyshetken asento ei tuota symbolia.
-//   LIIKE_VALMIS      laite on paikallaan, odotetaan liikettä
-//   LIIKE_KESKEN      liike on alkanut, kerätään liikkeen määrää LIIKE_IKKUNA_MS ajan
-// Siirtymät:
-//   PAIKALLAAN -> VALMIS     laite on ollut riittävän kauan paikallaan
-//   VALMIS     -> KESKEN     kiihtyvyys poikkeaa lepoarvosta yli LIIKE_ALKU_G
-//   KESKEN     -> PAIKALLAAN liikkeen määrä riittää (merkki tallennetaan) tai aika loppuu
+/*
+State machine:
+    STATIONARY_MOTION  Waiting for the device to remain stationary for STATIONARY_MS.
+                      This is the initial state upon startup; therefore,
+                      the orientation at the moment of startup does not trigger a symbol.
+    MOTION_READY       The device is stationary; waiting for motion.
+    MOTION_IN_PROGRESS Motion has begun; the magnitude of motion is accumulated over a duration of MOTION_WINDOW_MS.
+    Transitions:
+        STATIONARY -> READY       The device has remained stationary for a sufficient duration.
+        READY      -> IN_PROGRESS  Acceleration deviates from the resting value by more than MOTION_START_G.
+        IN_PROGRESS -> STATIONARY  The accumulated motion is sufficient (a symbol is recorded) or the time window expires.
+*/
+
 enum liike_tila { LIIKE_PAIKALLAAN = 1, LIIKE_VALMIS, LIIKE_KESKEN };
 
 static enum liike_tila liikeTila = LIIKE_PAIKALLAAN;
-static bool refOlemassa = false;       // onko lepoarvo (vertailuasento) asetettu
-static float refX, refY, refZ;         // lepoarvo, eli laitteen asento paikallaan
-static int paikallaanMs = 0;           // kuinka kauan laite on ollut paikallaan
-static float liikeSumma = 0.0f;        // liikkeen määrä (g*ms), merkki kertoo suunnan
-static int liikeMs = 0;                // liikkeen alusta kulunut aika
+static bool refOlemassa = false;       // is the rest value (reference position) set
+static float refX, refY, refZ;         // resting value, i.e., the device's position while stationary
+static int paikallaanMs = 0;           // how long the device has been in place
+static float liikeSumma = 0.0f;        // amount of motion (g*ms), sign indicates direction
+static int liikeMs = 0;                // time elapsed since the start of the movement
 
-// Pakottaa tilakoneen odottamaan paikallaanoloa (esim. napin painalluksen jälkeen)
+// Forces the state machine to wait for a stationary state (e.g., after a button press)
 static void liike_nollaa(void) {
 	liikeTila = LIIKE_PAIKALLAAN;
 	refOlemassa = false;
 }
 
-// Käsittelee yhden IMU-näytteen. Palauttaa '.' tai '-', kun liike tunnistetaan,
-// muuten 0. dtMs on edellisestä näytteestä kulunut aika.
+// Processes one IMU sample. Returns '.' or '-', when motion is detected,
+// otherwise 0. dtMs is the time elapsed since the previous sample.
 static char liike_askel(float ax, float ay, float az, int dtMs) {
 	char symboli = 0;
 	float akseli = LIIKE_AKSELI(ax, ay, az);
@@ -402,7 +404,7 @@ static char liike_askel(float ax, float ay, float az, int dtMs) {
 	switch (liikeTila) {
 
 	case LIIKE_PAIKALLAAN:
-		// Jos asento muuttuu, vertailuasento ja ajanlasku aloitetaan alusta
+		// If the orientation changes, the reference position and timing are reset
 		if (!refOlemassa
 			|| fabsf(ax - refX) > PAIKALLAAN_G
 			|| fabsf(ay - refY) > PAIKALLAAN_G
@@ -433,12 +435,12 @@ static char liike_askel(float ax, float ay, float az, int dtMs) {
 		liikeSumma += (akseli - akseliRef) * dtMs;
 		liikeMs += dtMs;
 		if (fabsf(liikeSumma) >= LIIKE_SUMMA_G_MS) {
-			// Riittävästi liikettä: suunta ratkaisee merkin
+			// Sufficient movement: the direction determines the sign
 			symboli = (liikeSumma > 0) ? '.' : '-';
 			liike_nollaa();
 		}
 		else if (liikeMs >= LIIKE_IKKUNA_MS) {
-			// Liike ei riittänyt aikaikkunassa: hylätään
+			// Insufficient movement within the time window: rejected
 			liike_nollaa();
 		}
 		break;
@@ -451,10 +453,10 @@ static char liike_askel(float ax, float ay, float az, int dtMs) {
 }
 
 // ---------------------------------------------------------------------------
-// Viestin kokoaminen, napit ja palaute
+// Message assembly, buttons, and feedback
 // ---------------------------------------------------------------------------
 
-// Näyttää kokoamisen alla olevan viestin (morse-merkit) näytöllä
+// Displays the message being assembled (morse code) on the display
 static void nayta_teksti(char viesti[]) {
 	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
 		lcd_msg(viesti);
@@ -462,8 +464,8 @@ static void nayta_teksti(char viesti[]) {
 	}
 }
 
-// Palaute lähetyksestä: teksti näytölle ja LED.
-// Onnistuminen = kolme lyhyttä välähdystä, virhe = yksi pitkä valo.
+// Feedback on transmission: text on the display and an LED.
+// Success = three short flashes, error = one long light.
 static void ilmoita(const char *teksti, bool onnistui) {
 	if (xSemaphoreTake(i2cMutex, portMAX_DELAY) == pdTRUE) {
 		clear_display();
@@ -487,17 +489,17 @@ static void ilmoita(const char *teksti, bool onnistui) {
 	}
 }
 
-// Lukee IMU:n, tallentaa tunnistetut merkit viestiin ja käsittelee napit:
-//   SW1 = välilyönti (1 = merkkiväli, 2 = sanaväli)
-//   SW2 = lähetä viesti työasemalle
+// Reads the IMU, saves the detected characters to the message, and processes the buttons:
+//   SW1 = space (1 = character space, 2 = word space)
+//   SW2 = send message to workstation
 static void kirjoitus_task(void *arg) {
 	(void)arg;
 
-	char viesti[MAX_MSG];       // viesti, jota kootaan
+	char viesti[MAX_MSG];       // message being assembled
 	int pituus = 0;
-	bool sw1Ennen = false;         // napin edellinen tila (nousevan reunan tunnistukseen)
+	bool sw1Ennen = false;         // button's previous state (for detecting rising edges)
 	bool sw2Ennen = false;
-	TickType_t edellinenNappi = 0; // edellisen painalluksen ajankohta
+	TickType_t edellinenNappi = 0; // time of the previous button press
 	TickType_t edellinen = xTaskGetTickCount();
 
 	viesti[0] = '\0';
@@ -505,7 +507,7 @@ static void kirjoitus_task(void *arg) {
 	while (1) {
 		vTaskDelay(pdMS_TO_TICKS(IMU_JAKSO_MS));
 
-		// Edellisestä kierroksesta kulunut aika
+		// Time elapsed since the previous iteration
 		TickType_t nyt = xTaskGetTickCount();
 		int dtMs = (int)((nyt - edellinen) * portTICK_PERIOD_MS);
 		edellinen = nyt;
@@ -530,7 +532,7 @@ static void kirjoitus_task(void *arg) {
 			}
 		}
 
-		// --- Napit (aktiivinen taso on korkea, joten tunnistetaan nouseva reuna) ---
+		// --- Buttons (active level is high, so rising edge is detected) ---
 		bool sw1 = gpio_get(SW1_PIN);
 		bool sw2 = gpio_get(SW2_PIN);
 		bool sw1Painettu = sw1 && !sw1Ennen;
@@ -538,7 +540,7 @@ static void kirjoitus_task(void *arg) {
 		sw1Ennen = sw1;
 		sw2Ennen = sw2;
 
-		// Suodatetaan napin värähtely: uutta painallusta ei hyväksytä heti edellisen jälkeen
+		// Filter button noise: new press is not accepted immediately after the previous one
 		if ((sw1Painettu || sw2Painettu)
 			&& (nyt - edellinenNappi) < pdMS_TO_TICKS(NAPPI_VIIVE_MS)) {
 			sw1Painettu = false;
@@ -546,12 +548,12 @@ static void kirjoitus_task(void *arg) {
 		}
 		if (sw1Painettu || sw2Painettu) {
 			edellinenNappi = nyt;
-			// Painallus liikuttaa laitetta, joten odotetaan että se on taas paikallaan
+			// Pressing the button moves the device, so we wait for it to settle again
 			liike_nollaa();
 		}
 
 		if (sw1Painettu) {
-			// Välilyönti vain, jos viestissä on jo merkkejä eikä lopussa ole jo kahta välilyöntiä
+			// Add a space only if the message already contains characters and does not already end with two spaces
 			bool kaksiValia = (pituus >= 2 && viesti[pituus - 1] == ' ' && viesti[pituus - 2] == ' ');
 			if (pituus > 0 && !kaksiValia && pituus < MAX_MSG - 1) {
 				viesti[pituus] = ' ';
@@ -562,7 +564,7 @@ static void kirjoitus_task(void *arg) {
 		}
 
 		if (sw2Painettu) {
-			// Viestin lopun välilyönnit poistetaan, laheta_viesti lisää protokollan lopun
+			// Remove trailing spaces from the message and add the protocol footer
 			while (pituus > 0 && viesti[pituus - 1] == ' ') {
 				pituus--;
 			}
@@ -580,7 +582,7 @@ static void kirjoitus_task(void *arg) {
 				viesti[0] = '\0';
 			}
 			else {
-				// Viesti jää talteen, joten lähetystä voi yrittää uudelleen
+				// The message is saved, so you can try sending it again
 				ilmoita("Send failed", false);
 			}
 			liike_nollaa();
@@ -599,7 +601,7 @@ int main() {
 
 	init_buzzer();
 
-    // Napit ja IMU. Mutex luodaan ennen taskeja.
+    // Buttons and IMU. The mutex is created before the tasks.
     init_sw1();
     init_sw2();
     if (init_ICM42670() == 0) {
@@ -626,12 +628,12 @@ int main() {
 	//Giving the task to FreeRTOS
 	xTaskCreate(display_task, "display", 2048, NULL, 2, &hDisplay);
 
-	// Jono luodaan ennen taskeja, jotta ne voivat käyttää sitä heti
+	// The queue is created before the tasks so that they can use it immediately
 	msgQueue = xQueueCreate(4, MAX_MSG);
 	xTaskCreate(vastaanotto_task, "vastaanotto", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 	xTaskCreate(kirjoitus_task, "kirjoitus", DEFAULT_STACK_SIZE, NULL, 2, NULL);
 
-	// Käynnistää USB-sarjaliikenteen. Heti perään vTaskStartScheduler.
+	// Initializes USB serial communication. Followed immediately by vTaskStartScheduler.
 	serial_comm_init();
 
     // Start the scheduler (never returns)
