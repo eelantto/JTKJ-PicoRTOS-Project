@@ -18,7 +18,7 @@ Claude AI was used to find and solve errors in this code.
 
 Responsibilities of the team members:
 -Eero Lantto: Transmission of symbols to a workstation via USB serial communication, receiving messages from a workstation. I used Claude AI in troubleshooting.
--Veeti Nymann: Displaying symbols using an LED and an LCD
+-Veeti Nyman: Displaying symbols using an LED and an LCD
 -Antton Leppänen: Feedback upon message transmission, and conversion of Morse symbols into letters
 
 -IMU was made together. The initial IMU implementation was done with the help of Claude AI, but based on the code of the students.
